@@ -1,0 +1,16 @@
+{
+    "name": "TBCDiscordBot",
+    "description": "The Breakfast Company's Discord Bot",
+    "keywords": [
+        "FIRST",
+        "FRC",
+        "Robotics",
+        "The Blue Alliance",
+        "TBA",
+        "Discord"
+    ],
+    "image": "heroku/go:1.9",
+    "mount_dir": "src/github.com/jlmcmchl/tbc-discord-bot",
+    "website": "http://github.com/jlmcmchl/tbc-discord-bot",
+    "repository": "http://github.com/jlmcmchl/tbc-discord-bot"
+}
