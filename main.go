@@ -28,6 +28,7 @@ var (
 	authKey   string
 	channels  []Channel
 	tRegex    = regexp.MustCompile("\\[\\[(?:(\\d+)(?:@(\\w+))?)\\]\\]")
+	pRegex    = regexp.MustCompile("")
 	tbaHeader http.Header
 )
 
@@ -122,7 +123,7 @@ func getTeamEventStatus(team, event string, year int) string {
 	return parsed["overall_status_str"].(string)
 }
 
-func processMessage(dg *discordgo.Session, msg *discordgo.Message) {
+func processTeamStatus(dg *discordgo.Session, msg *discordgo.Message) {
 	for _, match := range tRegex.FindAllStringSubmatch(msg.Content, -1) {
 		var event string
 		var eventCode string
@@ -137,11 +138,20 @@ func processMessage(dg *discordgo.Session, msg *discordgo.Message) {
 	}
 }
 
+func processDraftProposal(dg *discordgo.Session, msg *discordgo.Message) {
+
+}
+
 func discordListener() {
 	var err error
 	channels = make([]Channel, 0, 50)
 
 	dg, err := discordgo.New("Bot " + token)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	err = dg.Open()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -205,7 +215,7 @@ func discordListener() {
 				ts = tm
 			}
 
-			go processMessage(dg, msg)
+			go processTeamStatus(dg, msg)
 		}
 
 		if id != "" {
@@ -220,7 +230,6 @@ func main() {
 	authKey = os.Getenv("XTBAAUTHKEY")
 	tbaHeader = make(http.Header)
 	tbaHeader.Add("X-TBA-Auth-Key", authKey)
-	log.Println(token)
 
 	if port == "" {
 		log.Fatal("$PORT must be set")
