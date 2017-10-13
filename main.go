@@ -19,6 +19,7 @@ import (
 type Channel struct {
 	ID      string
 	Name    string
+	Guild   string
 	LastMsg string
 }
 
@@ -162,12 +163,14 @@ func discordListener() {
 		pLen := len(channels)
 		channels = channels[0 : pLen+len(guildChannels)]
 		for j, channel := range guildChannels {
-			if channel.Bitrate > 0 {
+			if channel.Bitrate > 0 || channel.Type != discordgo.ChannelTypeGuildText {
 				continue
 			}
+
 			channels[pLen+j] = Channel{
 				ID:      channel.ID,
 				Name:    channel.Name,
+				Guild:   guild.Name,
 				LastMsg: channel.LastMessageID}
 		}
 	}
@@ -178,7 +181,6 @@ func discordListener() {
 	for {
 		time.Sleep(50 * time.Millisecond)
 		i = (i + 1) % len(channels)
-		log.Printf("Processing channel %#v\n", channels[i])
 
 		msgs, err := dg.ChannelMessages(channels[i].ID, 0, "", channels[i].LastMsg, "")
 		if err != nil {
