@@ -47,7 +47,7 @@ func makeRequest(method, url string) (out []byte, err error) {
 	return ioutil.ReadAll(resp.Body)
 }
 
-func determineEvent(team string, year int) (event string) {
+func determineEvent(team string, year int) (event_code, event string) {
 	var err error
 	data, err := makeRequest(http.MethodGet,
 		fmt.Sprintf("https://www.thebluealliance.com/api/v3/team/frc%s/events/%d/simple",
@@ -74,12 +74,13 @@ func determineEvent(team string, year int) (event string) {
 		end.Add(24 * time.Hour)
 
 		if start.Before(time.Now()) && time.Now().Before(end) {
-			return event["event_code"].(string)
+			return event["event_code"].(string), event["name"].(string)
 		}
 	}
 
 	// No current event, get most recent even this year
-	var currEvent string
+	var currCode string
+	var currName string
 	currTime := time.Now().Add(-365 * 24 * time.Hour)
 	for _, event := range parsed {
 		end, err := time.Parse("2006-01-02", event["end_date"].(string))
@@ -89,12 +90,13 @@ func determineEvent(team string, year int) (event string) {
 		end.Add(24 * time.Hour)
 
 		if end.Before(time.Now()) && currTime.Before(end) {
-			currEvent = event["event_code"].(string)
+			currCode = event["event_code"].(string)
+			currName = event["name"].(string)
 			currTime = end
 		}
 	}
 
-	return currEvent
+	return currCode, currName
 }
 
 func getTeamEventStatus(team, event string, year int) string {
@@ -121,12 +123,13 @@ func getTeamEventStatus(team, event string, year int) string {
 
 func processMessage(dg *discordgo.Session, msg *discordgo.Message) {
 	for _, match := range tRegex.FindAllStringSubmatch(msg.Content, -1) {
+		var event string
+		var eventCode string
 		if match[2] == "" { // figure out event to report on
-			match[2] = determineEvent(match[1], time.Now().Year())
-			log.Printf("%#v\n", match)
+			eventCode, event = determineEvent(match[1], time.Now().Year())
 		}
 
-		status := fmt.Sprintf("At %s, %s", match[2], getTeamEventStatus(match[1], match[2], time.Now().Year()))
+		status := fmt.Sprintf("At %s, %s", event, getTeamEventStatus(match[1], eventCode, time.Now().Year()))
 		status = strings.Replace(status, "<b>", "**", -1)
 		status = strings.Replace(status, "</b>", "**", -1)
 		dg.ChannelMessageSend(msg.ChannelID, status)
@@ -135,10 +138,9 @@ func processMessage(dg *discordgo.Session, msg *discordgo.Message) {
 
 func discordListener() {
 	var err error
+	channels = make([]Channel, 0, 50)
 
 	dg, err := discordgo.New("Bot " + token)
-	channels = make([]Channel, 0, 20)
-
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -174,8 +176,9 @@ func discordListener() {
 
 	i := -1
 	for {
-		time.Sleep(time.Second)
+		time.Sleep(50 * time.Millisecond)
 		i = (i + 1) % len(channels)
+		log.Printf("Processing channel %#v\n", channels[i])
 
 		msgs, err := dg.ChannelMessages(channels[i].ID, 0, "", channels[i].LastMsg, "")
 		if err != nil {
@@ -183,22 +186,48 @@ func discordListener() {
 			continue
 		}
 
+		ts := time.Now().Add(-1 * time.Minute)
+		var id string
 		for _, msg := range msgs {
-			channels[i].LastMsg = msg.ID
+			if msg.ID == channels[i].LastMsg {
+				continue
+			}
+
+			tm, err := time.Parse(time.RFC3339, string(msg.Timestamp))
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			if tm.After(ts) {
+				id = msg.ID
+				ts = tm
+			}
+
 			go processMessage(dg, msg)
+		}
+
+		if id != "" {
+			channels[i].LastMsg = id
 		}
 	}
 }
 
 func main() {
-	token = os.Getenv("Token")
+	token = os.Getenv("TOKEN")
 	port := os.Getenv("PORT")
 	authKey = os.Getenv("XTBAAUTHKEY")
 	tbaHeader = make(http.Header)
 	tbaHeader.Add("X-TBA-Auth-Key", authKey)
+	log.Println(token)
 
 	if port == "" {
 		log.Fatal("$PORT must be set")
+	}
+	if port == "" {
+		log.Fatal("$TOKEN must be set")
+	}
+	if port == "" {
+		log.Fatal("$XTBAAUTHKEY must be set")
 	}
 
 	router := gin.New()
