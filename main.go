@@ -16,17 +16,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type Channel struct {
-	ID      string
-	Name    string
-	Guild   string
-	LastMsg string
-}
-
 var (
 	token     string
 	authKey   string
-	channels  []Channel
 	tRegex    = regexp.MustCompile("\\[\\[(?:(\\d+)(?:@(\\w+))?)\\]\\]")
 	pRegex    = regexp.MustCompile("")
 	tbaHeader http.Header
@@ -123,7 +115,7 @@ func getTeamEventStatus(team, event string, year int) string {
 	return parsed["overall_status_str"].(string)
 }
 
-func processTeamStatus(dg *discordgo.Session, msg *discordgo.Message) {
+func teamStatus(dg *discordgo.Session, msg *discordgo.MessageCreate) {
 	for _, match := range tRegex.FindAllStringSubmatch(msg.Content, -1) {
 		var event string
 		var eventCode string
@@ -138,89 +130,24 @@ func processTeamStatus(dg *discordgo.Session, msg *discordgo.Message) {
 	}
 }
 
-func processDraftProposal(dg *discordgo.Session, msg *discordgo.Message) {
+func draftProposal(dg *discordgo.Session, msg *discordgo.MessageCreate) {
 
 }
 
-func discordListener() {
+func setupDiscord() {
 	var err error
-	channels = make([]Channel, 0, 50)
 
 	dg, err := discordgo.New("Bot " + token)
 	if err != nil {
 		log.Fatal(err)
 	}
 
+	dg.AddHandler(teamStatus)
+	dg.AddHandler(draftProposal)
+
 	err = dg.Open()
 	if err != nil {
 		log.Fatal(err)
-	}
-
-	userGuilds, err := dg.UserGuilds(0, "", "")
-	if err != nil {
-		log.Fatal(err)
-	}
-	guilds := make([]string, len(userGuilds))
-
-	for i, guild := range userGuilds {
-		guilds[i] = guild.ID
-
-		guildChannels, err := dg.GuildChannels(guild.ID)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		pLen := len(channels)
-		channels = channels[0 : pLen+len(guildChannels)]
-		for j, channel := range guildChannels {
-			if channel.Bitrate > 0 || channel.Type != discordgo.ChannelTypeGuildText {
-				continue
-			}
-
-			channels[pLen+j] = Channel{
-				ID:      channel.ID,
-				Name:    channel.Name,
-				Guild:   guild.Name,
-				LastMsg: channel.LastMessageID}
-		}
-	}
-
-	log.Printf("%#v\n", channels)
-
-	i := -1
-	for {
-		time.Sleep(50 * time.Millisecond)
-		i = (i + 1) % len(channels)
-
-		msgs, err := dg.ChannelMessages(channels[i].ID, 0, "", channels[i].LastMsg, "")
-		if err != nil {
-			// Pretty much means there were no new messages, so skip
-			continue
-		}
-
-		ts := time.Now().Add(-1 * time.Minute)
-		var id string
-		for _, msg := range msgs {
-			if msg.ID == channels[i].LastMsg {
-				continue
-			}
-
-			tm, err := time.Parse(time.RFC3339, string(msg.Timestamp))
-			if err != nil {
-				log.Fatal(err)
-			}
-
-			if tm.After(ts) {
-				id = msg.ID
-				ts = tm
-			}
-
-			go processTeamStatus(dg, msg)
-		}
-
-		if id != "" {
-			channels[i].LastMsg = id
-		}
 	}
 }
 
@@ -247,7 +174,7 @@ func main() {
 		c.String(http.StatusOK, string("Hello World!"))
 	})
 
-	go discordListener()
+	go setupDiscord()
 
 	router.Run(":" + port)
 }
