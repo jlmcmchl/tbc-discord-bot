@@ -108,10 +108,6 @@ func getTeamEventStatus(team, event string, year int) string {
 		log.Printf("%#v\n", err)
 	}
 
-	if data == nil {
-		return "***Come on joe, you know better.***"
-	}
-
 	if bytes.Compare([]byte("null"), data) == 0 {
 		return "It looks like the event hasn't started, or there's no updates from TBA. Try again later on in the event for status updates!"
 	}
@@ -120,6 +116,10 @@ func getTeamEventStatus(team, event string, year int) string {
 	err = json.Unmarshal(data, &parsed)
 	if err != nil {
 		log.Printf("%#v\n", err)
+	}
+
+	if _, ok := parsed["Errors"]; ok {
+		return "***Come on joe, you know better.***"
 	}
 
 	return parsed["overall_status_str"].(string)
@@ -137,7 +137,13 @@ func teamStatus(dg *discordgo.Session, msg *discordgo.MessageCreate) {
 			eventCode, event = determineEvent(match[1], time.Now().Year())
 		}
 
-		status := fmt.Sprintf("At %s, %s", event, getTeamEventStatus(match[1], eventCode, time.Now().Year()))
+		var status string
+		if eventCode == "" {
+			status = "***Come on Joe, you know better.***"
+		} else {
+			status = fmt.Sprintf("At %s, %s", event, getTeamEventStatus(match[1], eventCode, time.Now().Year()))
+		}
+
 		status = strings.Replace(status, "<b>", "**", -1)
 		status = strings.Replace(status, "</b>", "**", -1)
 		dg.ChannelMessageSend(msg.ChannelID, status)
