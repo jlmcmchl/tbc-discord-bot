@@ -17,11 +17,17 @@ import (
 )
 
 var (
-	token     string
-	authKey   string
-	tRegex    = regexp.MustCompile("\\[\\[(?:(\\d+)(?:@(\\w+))?)\\]\\]")
-	pRegex    = regexp.MustCompile("")
-	tbaHeader http.Header
+	token       string
+	authKey     string
+	tRegex      = regexp.MustCompile("\\[\\[(?:(\\d+)(?:@(\\w+))?)\\]\\]")
+	pRegex      = regexp.MustCompile("")
+	nameRegex   = `(\w+)`
+	urlRegex    = `([-a-zA-Z0-9@:%._\+~#=]{2,256}\.[a-z]{2,6}\b[-a-zA-Z0-9@:%_\+.~#?&//=]*)`
+	roundsRegex = `(\d+)`
+	dateRegex   = `(\d\d\/\d\d@\d\d:\d\d)`
+	draftRegex  = regexp.MustCompile("(?m:Name: " + nameRegex + "\nTeams: " + urlRegex + "\nRounds: " + roundsRegex + "\nDate: " + dateRegex + ")")
+	dateTimeFmt = "01/02@15:04"
+	tbaHeader   http.Header
 )
 
 func makeRequest(method, url string) (out []byte, err error) {
@@ -102,6 +108,10 @@ func getTeamEventStatus(team, event string, year int) string {
 		log.Printf("%#v\n", err)
 	}
 
+	if data == nil {
+		return "***Come on joe, you know better.***"
+	}
+
 	if bytes.Compare([]byte("null"), data) == 0 {
 		return "It looks like the event hasn't started, or there's no updates from TBA. Try again later on in the event for status updates!"
 	}
@@ -116,6 +126,10 @@ func getTeamEventStatus(team, event string, year int) string {
 }
 
 func teamStatus(dg *discordgo.Session, msg *discordgo.MessageCreate) {
+	if msg.Author.ID == dg.State.User.ID {
+		return
+	}
+
 	for _, match := range tRegex.FindAllStringSubmatch(msg.Content, -1) {
 		var event string
 		var eventCode string
@@ -131,6 +145,15 @@ func teamStatus(dg *discordgo.Session, msg *discordgo.MessageCreate) {
 }
 
 func draftProposal(dg *discordgo.Session, msg *discordgo.MessageCreate) {
+	if msg.Author.ID == dg.State.User.ID {
+		return
+	}
+
+	prop := draftRegex.FindStringSubmatch(msg.Content)
+	if prop == nil {
+		return
+	}
+	log.Printf("%#v\n", prop)
 
 }
 
