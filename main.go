@@ -9,25 +9,36 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
+	"database/sql"
+
+	"sync"
+
 	"github.com/bwmarrin/discordgo"
 	"github.com/gin-gonic/gin"
+	_ "github.com/jackc/pgx/stdlib"
+	"github.com/robfig/cron"
 )
 
 var (
-	token       string
-	authKey     string
-	tRegex      = regexp.MustCompile("\\[\\[(?:(\\d+)(?:@(\\w+))?)\\]\\]")
-	pRegex      = regexp.MustCompile("")
-	nameRegex   = `(\w+)`
-	urlRegex    = `([-a-zA-Z0-9@:%._\+~#=]{2,256}\.[a-z]{2,6}\b[-a-zA-Z0-9@:%_\+.~#?&//=]*)`
-	roundsRegex = `(\d+)`
-	dateRegex   = `(\d\d\/\d\d@\d\d:\d\d)`
-	draftRegex  = regexp.MustCompile("(?m:Name: " + nameRegex + "\nTeams: " + urlRegex + "\nRounds: " + roundsRegex + "\nDate: " + dateRegex + ")")
-	dateTimeFmt = "01/02@15:04"
-	tbaHeader   http.Header
+	token         string
+	authKey       string
+	tRegex        = regexp.MustCompile("\\[\\[(?:(\\d+)(?:@(\\w+))?)\\]\\]")
+	pRegex        = regexp.MustCompile("")
+	nameRegex     = `(\w+)`
+	urlRegex      = `([-a-zA-Z0-9@:%._\/\+~#=]{2,256}\.[a-z]{2,6}\b[-a-zA-Z0-9@:%_\+.~#?&//=]*)`
+	roundsRegex   = `(\d+)`
+	dateRegex     = `(\d\d\/\d\d@\d\d:\d\d)`
+	draftRegex    = regexp.MustCompile("(?m:Name: " + nameRegex + "\nTeams: " + urlRegex + "\nRounds: " + roundsRegex + "\nDate: " + dateRegex + ")")
+	dateTimeFmt   = "01/02@15:04"
+	tbaHeader     http.Header
+	insertDraft   = "INSERT INTO Drafts (Name, Teams, Rounds, Date, Guild, Orig_ch, Msg) VALUES ($1, $2, $3, $4, $5, $6, $7)"
+	insertDateFmt = "2006-01-02 15:04:05"
+	mutex         = &sync.Mutex{}
+	db            *sql.DB
 )
 
 func makeRequest(method, url string) (out []byte, err error) {
@@ -47,7 +58,7 @@ func makeRequest(method, url string) (out []byte, err error) {
 	return ioutil.ReadAll(resp.Body)
 }
 
-func determineEvent(team string, year int) (event_code, event string) {
+func determineEvent(team string, year int) (string, string) {
 	var err error
 	data, err := makeRequest(http.MethodGet,
 		fmt.Sprintf("https://www.thebluealliance.com/api/v3/team/frc%s/events/%d/simple",
@@ -161,6 +172,112 @@ func draftProposal(dg *discordgo.Session, msg *discordgo.MessageCreate) {
 	}
 	log.Printf("%#v\n", prop)
 
+	mutex.Lock()
+	defer mutex.Unlock()
+
+	rounds, err := strconv.ParseInt(prop[3], 10, 64)
+	if err != nil {
+		log.Println(err)
+	}
+
+	dt, err := time.Parse(dateTimeFmt, prop[4])
+	if err != nil {
+		log.Println(err)
+	}
+
+	dt = dt.AddDate(time.Now().Year(), 0, 0)
+
+	ch, err := dg.Channel(msg.ChannelID)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	guild := ch.GuildID
+
+	log.Println(prop[1], prop[2], rounds, dt, guild)
+
+	_, err = db.Exec(insertDraft, prop[1], prop[2], rounds, dt, guild, msg.ChannelID, msg.ID)
+	if err != nil {
+		log.Println(err)
+	}
+}
+
+func getDrafts() {
+	dg, err := discordgo.New("Bot " + token)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	err = dg.Open()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	today := time.Now()
+	tomorrow := today.AddDate(0, 0, 1)
+	log.Println(today, tomorrow)
+	rows, err := db.Query("SELECT Draft_Key, Name, Teams, Rounds, Date, Guild, Orig_ch, Msg FROM Drafts WHERE COALESCE(Channel, '') = '' AND Date BETWEEN $1 AND $2", today, tomorrow)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	for rows.Next() {
+		var key int
+		var name string
+		var teams string
+		var rounds int
+		var date time.Time
+		var guild string
+		var orig_ch string
+		var msgID string
+
+		err = rows.Scan(&key, &name, &teams, &rounds, &date, &guild, &orig_ch, &msgID)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		log.Println(key, name, teams, rounds, date, guild)
+
+		name = strings.Replace(strings.TrimSpace(name), " ", "-", -1)
+		ch, err := dg.GuildChannelCreate(guild, "draft-"+name, "0")
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		_, err = db.Exec("UPDATE Drafts SET Channel = $1 WHERE Draft_Key = $2", ch.ID, key)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		role, err := dg.GuildRoleCreate(guild)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		role, err = dg.GuildRoleEdit(guild, role.ID, name+" Drafter", role.Color, false, role.Permissions, true)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		message, err := dg.ChannelMessage(orig_ch, msgID)
+		if err != nil {
+			log.Fatal(err)
+		}
+		for _, reaction := range message.Reactions {
+			users, err := dg.MessageReactions(orig_ch, msgID, reaction.Emoji.ID, 100)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			for _, user := range users {
+				err = dg.GuildMemberRoleAdd(guild, user.ID, role.ID)
+				if err != nil {
+					log.Fatal(err)
+				}
+			}
+		}
+
+	}
 }
 
 func setupDiscord() {
@@ -190,17 +307,32 @@ func main() {
 	if port == "" {
 		log.Fatal("$PORT must be set")
 	}
-	if port == "" {
+	if token == "" {
 		log.Fatal("$TOKEN must be set")
 	}
-	if port == "" {
+	if authKey == "" {
 		log.Fatal("$XTBAAUTHKEY must be set")
 	}
+
+	var err error
+	db, err = sql.Open("pgx", os.Getenv("DATABASE_URL"))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	c := cron.New()
+	c.AddFunc("@midnight", getDrafts)
+	go c.Run()
 
 	router := gin.New()
 	router.Use(gin.Logger())
 	router.GET("/", func(c *gin.Context) {
 		c.String(http.StatusOK, string("Hello World!"))
+	})
+
+	router.GET("/getDrafts", func(c *gin.Context) {
+		go getDrafts()
+		c.String(http.StatusOK, string("Pulling Drafts..."))
 	})
 
 	go setupDiscord()
